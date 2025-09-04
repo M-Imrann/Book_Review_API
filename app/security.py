@@ -1,76 +1,93 @@
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from collections import defaultdict, deque
+from passlib.context import CryptContext
 import time
+from app.database import get_db
+from app import models
 
-from .database import get_db
-from . import models
 
-
+# Security configuration
 SECRET_KEY = "supersecretkey123"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
+# Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 
-def verify_password(plain_password, hashed_password):
+def verify_password(plain_password: str, hashed_password: str) -> bool:
     """
-    verify_password function will verify that the provided
-    plain password matches the stored hashed password.
+    Verify if a plain text password matches the hashed password.
+
+    Args:
+        plain_password: The password in plain text
+        hashed_password: The hashed password from the database
 
     Returns:
-        Returns True if passwords match, False otherwise.
+        bool: True if passwords match, False otherwise
     """
     return pwd_context.verify(plain_password, hashed_password)
 
 
-def get_password_hash(password):
+def get_password_hash(password: str) -> str:
     """
-    get_password_hash function will hash a plain password
-    using bcrypt for secure storage.
+    Hash a plain text password using bcrypt.
+
+    Args:
+        password: The password in plain text
 
     Returns:
-        Returns the hashed password string.
+        str: The hashed password
     """
     return pwd_context.hash(password)
 
 
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
+def create_access_token(data: dict, expires_delta: timedelta = None) -> str:
     """
-    create_access_token function will create a
-    JWT access token with optional expiration.
+    Create a JWT access token with an optional expiration time.
+
+    Args:
+        data: The payload data to include in the token
+        expires_delta: Optional custom expiration time
 
     Returns:
-        Returns the encoded JWT token as a string.
+        str: The encoded JWT token
     """
     to_encode = data.copy()
-    expire = datetime.utcnow()\
-        + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.utcnow()
+    + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def get_current_user(
-        token: str = Depends(oauth2_scheme),
-        db: Session = Depends(get_db)
-        ):
+    token: str = Depends(oauth2_scheme),
+    db_session: Session = Depends(get_db)
+) -> models.User:
     """
-    get_current_user function will retrieve the currently
-    authenticated user from the provided JWT token.
+    Retrieve the currently authenticated user from the JWT token.
 
-    Raises 401 if the token is invalid or the user does not exist.
+    Args:
+        token: The JWT token from the Authorization header
+        db_session: The database session
+
+    Returns:
+        models.User: The authenticated user
+
+    Raises:
+        HTTPException: If the token is invalid or user doesn't exist
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
@@ -78,52 +95,72 @@ def get_current_user(
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-    user = db.query(models.User).filter(models.User.id == int(user_id)).first()
+
+    user = db_session.query(models.User)\
+        .filter(models.User.id == int(user_id)).first()
     if user is None:
         raise credentials_exception
+
     return user
 
 
-def require_admin(current_user: models.User = Depends(get_current_user)):
+def require_admin(
+        current_user: models.User = Depends(get_current_user)) -> models.User:
     """
-    require_admin function will ensure the current user has admin privileges.
+    Ensure the current user has admin privileges.
 
-    Raises 403 if the user is not an admin.
+    Args:
+        current_user: The authenticated user
+
+    Returns:
+        models.User: The user if they are an admin
+
+    Raises:
+        HTTPException: If the user is not an admin
     """
-    if current_user.role != "admin":
+    if current_user.role != models.UserRole.admin:
         raise HTTPException(
-            status_code=403,
-            detail="Admin privileges required"
-            )
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required to perform this action"
+        )
     return current_user
 
 
-_WINDOW_SECONDS = 60
-_MAX_CALLS = 60
+# Rate limiting configuration
+RATE_LIMIT_WINDOW_SECONDS = 60
+MAX_REQUESTS_PER_WINDOW = 60
 
-_call_buckets = defaultdict(lambda: deque())
+request_timestamps = defaultdict(lambda: deque())
 
 
 def rate_limit(
-        request: Request,
-        current_user: models.User = Depends(get_current_user)
-        ):
+    request: Request,
+    current_user: models.User = Depends(get_current_user)
+) -> None:
     """
-    rate_limit function will limit the number of API
-    requests per user or IP within a time window.
+    Limit the number of API requests per user or IP within a time window.
 
-    Raises 429 if the rate limit is exceeded.
+    Args:
+        request: The incoming request
+        current_user: The authenticated user
+
+    Raises:
+        HTTPException: If the rate limit is exceeded
     """
-    key = f"user:{current_user.id}"\
+    identifier = f"user:{current_user.id}"\
         if current_user else f"ip:{request.client.host}"
-    now = time.time()
-    dq = _call_buckets[key]
-    # purge old
-    while dq and now - dq[0] > _WINDOW_SECONDS:
-        dq.popleft()
-    if len(dq) >= _MAX_CALLS:
+    current_time = time.time()
+    timestamps = request_timestamps[identifier]
+
+    # Remove timestamps outside the current window
+    while timestamps and current_time - timestamps[0]\
+            > RATE_LIMIT_WINDOW_SECONDS:
+        timestamps.popleft()
+
+    if len(timestamps) >= MAX_REQUESTS_PER_WINDOW:
         raise HTTPException(
-            status_code=429,
-            detail="Rate limit exceeded. Try again soon."
-            )
-    dq.append(now)
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please try again later."
+        )
+
+    timestamps.append(current_time)

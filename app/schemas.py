@@ -1,46 +1,88 @@
 from pydantic import BaseModel, EmailStr, conint
 from typing import Optional
+from enum import Enum
+
+
+class UserRole(str, Enum):
+    """
+    Enumeration representing user roles in the system.
+
+    """
+    user = "user"
+    admin = "admin"
 
 
 class UserCreate(BaseModel):
     """
-    Schema for User Create
+    Schema for creating a new user.
     """
     email: EmailStr
     password: str
+    role: UserRole
+
+    class Config:
+        """
+        Pydantic configuration for the UserCreate schema.
+        """
+        # Example of how this schema would be used
+        json_schema_extra = {
+            "example": {
+                "email": "user@example.com",
+                "password": "password123",
+                "role": "user"
+            }
+        }
 
 
 class UserRead(BaseModel):
     """
-    Schema for User Read
+    Schema for reading user data excluding password.
     """
     id: int
     email: EmailStr
-    role: str
+    role: UserRole
 
     class Config:
+        """
+        Pydantic configuration for the UserRead schema.
+        """
         from_attributes = True
 
 
 class BookBase(BaseModel):
     """
-    Schema for Book
+    Base schema for book data containing common fields.
     """
     title: str
     author: str
     description: Optional[str] = None
 
+    class Config:
+        """
+        Pydantic configuration for the BookBase schema.
+        """
+        # Example of how this schema would be used
+        json_schema_extra = {
+            "example": {
+                "title": "The Great Gatsby",
+                "author": "F. Scott Fitzgerald",
+                "description": "A classic American novel set in the Jazz Age"
+            }
+        }
+
 
 class BookCreate(BookBase):
     """
-    Schema for Book Create
+    Schema for creating a new book.
     """
     cover_image: Optional[str] = None
 
 
 class BookUpdate(BaseModel):
     """
-    Schema for Book Update
+    Schema for updating an existing book.
+
+    All fields are optional as we may only want to update specific attributes.
     """
     title: Optional[str] = None
     author: Optional[str] = None
@@ -50,7 +92,7 @@ class BookUpdate(BaseModel):
 
 class Book(BookBase):
     """
-    Schema for reading the data
+    Complete schema for book data to read.
     """
     id: int
     owner_id: int
@@ -58,12 +100,15 @@ class Book(BookBase):
     cover_image: Optional[str] = None
 
     class Config:
+        """
+        Pydantic configuration for the Book schema.
+        """
         from_attributes = True
 
 
 class ReviewBase(BaseModel):
     """
-    Schema for Review
+    Base schema for review.
     """
     content: Optional[str] = None
     rating: conint(ge=1, le=5)
@@ -71,14 +116,14 @@ class ReviewBase(BaseModel):
 
 class ReviewCreate(ReviewBase):
     """
-    Schema for Review Create
+    Schema for creating a new review.
     """
     book_id: int
 
 
 class ReviewUpdate(BaseModel):
     """
-    Schema for Review Update
+    Schema for updating an existing review.
     """
     content: Optional[str] = None
     rating: Optional[conint(ge=1, le=5)] = None
@@ -86,7 +131,7 @@ class ReviewUpdate(BaseModel):
 
 class Review(ReviewBase):
     """
-    Schema for Review reading
+    Complete schema for review to read.
     """
     id: int
     user_id: int
@@ -95,15 +140,27 @@ class Review(ReviewBase):
     dislikes: int = 0
 
     class Config:
+        """
+        Pydantic configuration for the Review schema.
+        """
         from_attributes = True
 
 
 class ReactionIn(BaseModel):
     """
-    Schema for Review Reacting
+    Schema for submitting a reaction (like/dislike) to a review.
     """
     review_id: int
     value: int
 
     class Config:
-        json_schema_extra = {"example": {"review_id": 1, "value": 1}}
+        """
+        Pydantic configuration for the ReactionIn schema.
+        """
+        # Example of how this schema would be used
+        json_schema_extra = {
+            "example": {
+                "review_id": 1,
+                "value": 1
+            }
+        }
