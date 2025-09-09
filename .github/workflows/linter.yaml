@@ -2,7 +2,7 @@ name: Linter and Tester
 
 on:
   pull_request:
-    types: [closed]
+    types: [opened]
 
 jobs:
   Linter:
